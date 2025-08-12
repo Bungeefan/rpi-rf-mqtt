@@ -1,0 +1,15 @@
+[Unit]
+Description=RF MQTT Script
+After=network-online.target
+
+[Service]
+Type=simple
+KillSignal=SIGINT
+ExecStart=/home/pi/rpi-rf-mqtt/venv/bin/python3 rpi-rf-mqtt.py
+WorkingDirectory=/home/pi/rpi-rf-mqtt/
+User=pi
+Group=pi
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
