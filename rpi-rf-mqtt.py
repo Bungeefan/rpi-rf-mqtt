@@ -70,15 +70,12 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
         if payload == "Jump":
             send_action(RF_CODE_JUMP)
             client.publish(light_switch["effect_state_topic"], payload)
-            client.publish(jump_switch["state_topic"], "ON")
         elif payload == "Fade":
             send_action(RF_CODE_FADE)
             client.publish(light_switch["effect_state_topic"], payload)
-            client.publish(jump_switch["state_topic"], "OFF")
         elif payload == "Strobe":
             send_action(RF_CODE_STROBE)
             client.publish(light_switch["effect_state_topic"], payload)
-            client.publish(jump_switch["state_topic"], "OFF")
         elif payload == "Off":
             set_brightness(client, 1)
             client.publish(light_switch["effect_state_topic"], "OFF")
@@ -94,30 +91,6 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
     if msg.topic == brightness_minus_button["command_topic"]:
         if payload == "PRESS":
             send_action(RF_CODE_BRIGHTNESS_MINUS)
-
-    if msg.topic == jump_switch["command_topic"]:
-        if payload == "ON":
-            send_action(RF_CODE_JUMP)
-            client.publish(jump_switch["state_topic"], payload)
-            client.publish(light_switch["effect_state_topic"], "Jump")
-        elif payload == "OFF":
-            set_brightness(client, 1)
-            client.publish(jump_switch["state_topic"], payload)
-
-    if msg.topic == jump_button["command_topic"]:
-        if payload == "PRESS":
-            send_action(RF_CODE_JUMP)
-            client.publish(jump_switch["state_topic"], "ON")
-
-    if msg.topic == fade_button["command_topic"]:
-        if payload == "PRESS":
-            send_action(RF_CODE_FADE)
-            client.publish(jump_switch["state_topic"], "OFF")
-
-    if msg.topic == strobe_button["command_topic"]:
-        if payload == "PRESS":
-            send_action(RF_CODE_STROBE)
-            client.publish(jump_switch["state_topic"], "OFF")
 
 
 def set_brightness(client: paho.Client, brightness):
@@ -138,7 +111,6 @@ def set_brightness(client: paho.Client, brightness):
             return
     client.publish(light_switch['brightness_state_topic'], brightness)
     client.publish(light_switch["effect_state_topic"], "OFF")
-    client.publish(jump_switch["state_topic"], "OFF")
 
 
 def on_connect(client: paho.Client, userdata, flags, reason_code, properties):
@@ -272,24 +244,6 @@ if __name__ == '__main__':
                                                  True)
     client.publish(brightness_minus_button["discovery_topic"], json.dumps(brightness_minus_button))
     client.subscribe(brightness_minus_button["command_topic"])
-
-    jump_switch = create_base_entity('jump_switch', "JUMP", "mdi:led-on", 'switch', True)
-    client.publish(jump_switch["discovery_topic"], json.dumps(jump_switch))
-    client.subscribe(jump_switch["command_topic"])
-    time.sleep(1)
-    client.publish(jump_switch["state_topic"], "OFF")
-
-    jump_button = create_base_entity('jump_button', "JUMP", "mdi:led-on", 'button', True)
-    client.publish(jump_button["discovery_topic"], json.dumps(jump_button))
-    client.subscribe(jump_button["command_topic"])
-
-    fade_button = create_base_entity('fade_button', "FADE", "mdi:led-off", 'button', True)
-    client.publish(fade_button["discovery_topic"], json.dumps(fade_button))
-    client.subscribe(fade_button["command_topic"])
-
-    strobe_button = create_base_entity('strobe_button', "STROBE", "mdi:led-on", 'button', True)
-    client.publish(strobe_button["discovery_topic"], json.dumps(strobe_button))
-    client.subscribe(strobe_button["command_topic"])
 
     try:
         client.loop_forever()
