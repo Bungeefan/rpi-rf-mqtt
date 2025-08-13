@@ -5,6 +5,7 @@ import re
 import socket
 import sys
 import time
+import typing
 import uuid
 
 import paho.mqtt.client as paho
@@ -41,6 +42,54 @@ except Exception as importExc:
     print("Can't import RFDevice, actions won't work:", importExc)
 
 
+class MqttEntity(dict):
+    def __init__(self, data=None, **kwargs):
+        if data is not None:
+            super().__init__(**data)  # Unpack the dictionary into the MqttEntity
+        super().__init__(**kwargs)
+
+    def publish(self, client: paho.Client):
+        if self["discovery_topic"] is not None:
+            client.publish(self["discovery_topic"], json.dumps(self))
+
+    def subscribe(self, client: paho.Client):
+        if self["command_topic"] is not None:
+            client.subscribe(self["command_topic"])
+
+
+class Switch(MqttEntity):
+    def __init__(self, data=None, **kwargs):
+        super().__init__(data, **kwargs)
+
+    def publish(self, client: paho.Client):
+        super().publish(client)
+        # TODO
+        time.sleep(1)
+        client.publish(self["state_topic"], "OFF")
+
+    def subscribe(self, client: paho.Client):
+        super().subscribe(client)
+
+
+class LightSwitch(MqttEntity):
+    def __init__(self, data=None, **kwargs):
+        super().__init__(data, **kwargs)
+
+    def publish(self, client: paho.Client):
+        super().publish(client)
+        # client.publish(self["availability_topic"], "online")
+        # client.publish(self["brightness_command_topic"], "OFF")
+        # TODO
+        time.sleep(1)
+        client.publish(self["state_topic"], "OFF")
+        # client.publish(self["brightness_state_topic"], "0")
+
+    def subscribe(self, client: paho.Client):
+        super().subscribe(client)
+        client.subscribe(self["brightness_command_topic"])
+        client.subscribe(self["effect_command_topic"])
+
+
 def get_mac_address():
     mac_num = uuid.getnode()
     mac = '-'.join((('%012X' % mac_num)[i:i + 2] for i in range(0, 12, 2)))
@@ -55,6 +104,70 @@ def build_device_info():
     }
 
 
+def create_base_entity(id: str, name: str, icon: str, component: str, command: bool = False) -> dict[str, typing.Any]:
+    entity = {
+        "state_topic": f"{config.mqtt_topic_prefix}/{hostname}/{id}",
+        "discovery_topic": f"{config.mqtt_discovery_prefix}/{component}/{hostname}/{id}/config",
+        "unique_id": f"{hostname}_{id}",
+        "device": build_device_info()
+    }
+
+    if name:
+        entity["name"] = name
+    if icon:
+        entity["icon"] = icon
+    if command:
+        entity["command_topic"] = f"{config.mqtt_topic_prefix}/{hostname}/{id}/set"
+
+    # entity["availability_topic"] = f"{entity['state_topic']}_availability"
+
+    return entity
+
+
+def create_button(id: str, name: str, icon: str):
+    return MqttEntity(create_base_entity(id, name, icon, "button", True))
+
+
+def create_switch(id: str, name: str, icon: str):
+    return Switch(create_base_entity(id, name, icon, "switch", True))
+
+
+def create_light_switch(id: str, name: str, icon: str, brightness_scale: int = None,
+                        effects: list[str] = None) -> LightSwitch:
+    data = create_base_entity(id, name, icon, 'light', True)
+    data["brightness_state_topic"] = data['state_topic'] + "/brightness"
+    data["brightness_command_topic"] = data["brightness_state_topic"] + "/set"
+    if brightness_scale is not None:
+        data["brightness_scale"] = brightness_scale
+    if effects is not None and len(effects) > 0:
+        data["effect"] = True
+        effects.insert(0, "Off")
+        data["effect_list"] = effects
+        data["effect_state_topic"] = data["state_topic"] + "/effect"
+        data["effect_command_topic"] = data["effect_state_topic"] + "/set"
+
+    return LightSwitch(data)
+
+
+def create_entities():
+    global entities, light_switch, delay_off_button, brightness_plus_button, brightness_minus_button
+
+    # on_off_switch = create_switch('on_off', "LED Element", "mdi:lightbulb")
+
+    light_switch = create_light_switch('light_switch', "LED Element", "mdi:lightbulb", 6, ["Jump", "Fade", "Strobe"])
+
+    delay_off_button = create_button('delay_off_button', "60s Delay OFF", "mdi:lightbulb-off-outline")
+    brightness_plus_button = create_button('brightness_plus_button', "Brightness+", "mdi:brightness-7")
+    brightness_minus_button = create_button('brightness_minus_button', "Brightness-", "mdi:brightness-5")
+
+    entities = [
+        light_switch,
+        delay_off_button,
+        brightness_plus_button,
+        brightness_minus_button,
+    ]
+
+
 def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
     payload = msg.payload.decode()
     print("Received message:", msg.topic, payload)
@@ -62,10 +175,10 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
     if msg.topic == light_switch["command_topic"]:
         if payload == "ON":
             send_action(RF_CODE_ON)
-            client.publish(light_switch['state_topic'], msg.payload)
+            client.publish(light_switch['state_topic'], payload)
         elif payload == "OFF":
             send_action(RF_CODE_OFF)
-            client.publish(light_switch['state_topic'], msg.payload)
+            client.publish(light_switch['state_topic'], payload)
 
     if msg.topic == light_switch["brightness_command_topic"]:
         brightness = int(payload)
@@ -98,7 +211,7 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
             send_action(RF_CODE_BRIGHTNESS_MINUS, 6)
 
 
-def set_brightness(client: paho.Client, brightness):
+def set_brightness(client: paho.Client, brightness: int):
     match brightness:
         case 1:
             send_action(RF_CODE_BRIGHTNESS_10)
@@ -116,21 +229,6 @@ def set_brightness(client: paho.Client, brightness):
             return
     client.publish(light_switch['brightness_state_topic'], brightness)
     client.publish(light_switch["effect_state_topic"], "OFF")
-
-
-def on_connect(client: paho.Client, userdata, flags, reason_code, properties):
-    if reason_code != 0:
-        print("Error: Unable to connect to MQTT broker, return code:", reason_code)
-
-
-def on_log(client: paho.Client, userdata, level, buf):
-    # print("MQTT log:", buf)
-    if level == paho.MQTT_LOG_ERR:
-        print("MQTT error:", buf)
-
-
-def on_subscribe(client: paho.Client, userdata, mid, reason_codes, properties: paho.Properties):
-    print("Listening to topic:", userdata, mid, reason_codes, properties.json())
 
 
 def send_action(rf_code, rf_repeat=RF_REPEAT):
@@ -160,96 +258,52 @@ else:
     hostname = re.sub(r'[^a-zA-Z0-9_-]', '_', socket.gethostname())
 
 
-def create_base_entity(id, name, icon, component, command: bool = False):
-    data = {
-        "state_topic": f"{config.mqtt_topic_prefix}/{hostname}/{id}",
-        "discovery_topic": f"{config.mqtt_discovery_prefix}/{component}/{hostname}/{id}/config",
-        "unique_id": f"{hostname}_{id}",
-        "device": build_device_info()
-    }
-
-    if name:
-        data["name"] = name
-    if icon:
-        data["icon"] = icon
-    if command:
-        data["command_topic"] = f"{config.mqtt_topic_prefix}/{hostname}/{id}/set"
-
-    # data["availability_topic"] = f"{data['state_topic']}_availability"
-
-    return data
+def on_connect(client: paho.Client, userdata, flags: paho.ConnectFlags, reason_code: paho.ReasonCode,
+               properties: paho.Properties):
+    if reason_code != 0:
+        print("Error: Unable to connect to MQTT broker, reason code:", reason_code)
+    else:
+        print("Connected to MQTT broker")
+        for entity in entities:
+            entity.subscribe(client)
+        for entity in entities:
+            entity.publish(client)
 
 
-def create_on_off_switch():
-    data = create_base_entity('on_off', "LED Element", "mdi:lightbulb", 'switch', True)
-    # data["platform"] = "switch"
+def on_disconnect(client: paho.Client, userdata, flags: paho.DisconnectFlags, reason_code: paho.ReasonCode,
+                  properties: paho.Properties):
+    if reason_code != 0:
+        print("Disconnected from MQTT broker, reason code:", reason_code)
+    else:
+        print("Disconnected from MQTT broker")
 
-    return data
 
-
-def create_light_switch(id, name, icon, brightness_scale: int = None, effects: list[str] = None):
-    data = create_base_entity(id, name, icon, 'light', True)
-    data["brightness_state_topic"] = data['state_topic'] + "/brightness"
-    data["brightness_command_topic"] = data["brightness_state_topic"] + "/set"
-    if brightness_scale is not None:
-        data["brightness_scale"] = brightness_scale
-    if effects is not None and len(effects) > 0:
-        data["effect"] = True
-        effects.insert(0, "Off")
-        data["effect_list"] = effects
-        data["effect_state_topic"] = data["state_topic"] + "/effect"
-        data["effect_command_topic"] = data["effect_state_topic"] + "/set"
-
-    return data
+def on_log(client: paho.Client, userdata, level: int, msg: str):
+    if level == paho.MQTT_LOG_INFO:
+        print("MQTT info:", msg)
+    if level == paho.MQTT_LOG_WARNING:
+        print("MQTT warn:", msg)
+    if level == paho.MQTT_LOG_ERR:
+        print("MQTT error:", msg)
 
 
 if __name__ == '__main__':
+    create_entities()
+
     client = paho.Client(paho.CallbackAPIVersion.VERSION2,
                          client_id="rpi-rf-mqtt-" + hostname + "_" + str(int(time.time())))
     client.username_pw_set(config.mqtt_user, config.mqtt_password)
     client.on_log = on_log
     client.on_connect = on_connect
-    # client.on_subscribe = on_subscribe
+    client.on_disconnect = on_disconnect
     client.on_message = on_message
-    client.will_set(config.mqtt_topic_prefix + "/" + hostname + "/status", "0",
-                    qos=config.qos, retain=config.retain)
+    # client.will_set(config.mqtt_topic_prefix + "/" + hostname + "/status", "0",
+    #                 qos=config.qos, retain=config.retain)
     try:
         client.connect(config.mqtt_host, int(config.mqtt_port))
     except Exception as e:
         print("Error connecting to MQTT broker:", e)
         sys.exit(1)
-
-    # on_off_switch = create_on_off_switch()
-    # client.publish(on_off_switch["discovery_topic"], json.dumps(on_off_switch))
-    # client.publish(on_off_switch["availability_topic"], "online")
-    # client.publish(on_off_switch["state_topic"], "OFF")
-
-    light_switch = create_light_switch('light_switch', "LED Element", "mdi:lightbulb", 6, ["Jump", "Fade", "Strobe"])
-    client.publish(light_switch["discovery_topic"], json.dumps(light_switch))
-    client.subscribe(light_switch["command_topic"])
-    client.subscribe(light_switch["brightness_command_topic"])
-    client.subscribe(light_switch["effect_command_topic"])
-    # client.publish(light_switch["availability_topic"], "online")
-    # client.publish(light_switch["brightness_command_topic"], "OFF")
-    # TODO
-    time.sleep(1)
-    client.publish(light_switch["state_topic"], "OFF")
-    # client.publish(light_switch["brightness_state_topic"], "0")
-
-    delay_off_button = create_base_entity('delay_off_button', "60s Delay OFF", "mdi:lightbulb-off-outline", 'button',
-                                          True)
-    client.publish(delay_off_button["discovery_topic"], json.dumps(delay_off_button))
-    client.subscribe(delay_off_button["command_topic"])
-
-    brightness_plus_button = create_base_entity('brightness_plus_button', "Brightness+", "mdi:brightness-7", 'button',
-                                                True)
-    client.publish(brightness_plus_button["discovery_topic"], json.dumps(brightness_plus_button))
-    client.subscribe(brightness_plus_button["command_topic"])
-
-    brightness_minus_button = create_base_entity('brightness_minus_button', "Brightness-", "mdi:brightness-5", 'button',
-                                                 True)
-    client.publish(brightness_minus_button["discovery_topic"], json.dumps(brightness_minus_button))
-    client.subscribe(brightness_minus_button["command_topic"])
 
     try:
         client.loop_forever()
