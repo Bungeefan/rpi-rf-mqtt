@@ -48,7 +48,7 @@ class MqttEntity(dict):
             super().__init__(**data)  # Unpack the dictionary into the MqttEntity
         super().__init__(**kwargs)
 
-    def publish(self, client: paho.Client):
+    def initial_publish(self, client: paho.Client):
         if self["discovery_topic"] is not None:
             client.publish(self["discovery_topic"], json.dumps(self))
 
@@ -61,27 +61,17 @@ class Switch(MqttEntity):
     def __init__(self, data=None, **kwargs):
         super().__init__(data, **kwargs)
 
-    def publish(self, client: paho.Client):
-        super().publish(client)
-        # TODO
-        time.sleep(1)
-        client.publish(self["state_topic"], "OFF")
-
-    def subscribe(self, client: paho.Client):
-        super().subscribe(client)
-
 
 class LightSwitch(MqttEntity):
     def __init__(self, data=None, **kwargs):
         super().__init__(data, **kwargs)
 
-    def publish(self, client: paho.Client):
-        super().publish(client)
+    def initial_publish(self, client: paho.Client):
+        super().initial_publish(client)
         # client.publish(self["availability_topic"], "online")
         # client.publish(self["brightness_command_topic"], "OFF")
-        # TODO
-        time.sleep(1)
-        client.publish(self["state_topic"], "OFF")
+        # time.sleep(1)
+        # client.publish(self["state_topic"], "OFF")
         # client.publish(self["brightness_state_topic"], "0")
 
     def subscribe(self, client: paho.Client):
@@ -175,10 +165,10 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
     if msg.topic == light_switch["command_topic"]:
         if payload == "ON":
             send_action(RF_CODE_ON)
-            client.publish(light_switch['state_topic'], payload)
+            client.publish(light_switch['state_topic'], payload, retain=True)
         elif payload == "OFF":
             send_action(RF_CODE_OFF)
-            client.publish(light_switch['state_topic'], payload)
+            client.publish(light_switch['state_topic'], payload, retain=True)
 
     if msg.topic == light_switch["brightness_command_topic"]:
         brightness = int(payload)
@@ -187,16 +177,16 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
     if msg.topic == light_switch["effect_command_topic"]:
         if payload == "Jump":
             send_action(RF_CODE_JUMP)
-            client.publish(light_switch["effect_state_topic"], payload)
+            client.publish(light_switch["effect_state_topic"], payload, retain=True)
         elif payload == "Fade":
             send_action(RF_CODE_FADE)
-            client.publish(light_switch["effect_state_topic"], payload)
+            client.publish(light_switch["effect_state_topic"], payload, retain=True)
         elif payload == "Strobe":
             send_action(RF_CODE_STROBE)
-            client.publish(light_switch["effect_state_topic"], payload)
+            client.publish(light_switch["effect_state_topic"], payload, retain=True)
         elif payload == "Off":
             set_brightness(client, 1)
-            client.publish(light_switch["effect_state_topic"], "OFF")
+            client.publish(light_switch["effect_state_topic"], "OFF", retain=True)
 
     if msg.topic == delay_off_button["command_topic"]:
         if payload == "PRESS":
@@ -227,8 +217,8 @@ def set_brightness(client: paho.Client, brightness: int):
             send_action(RF_CODE_BRIGHTNESS_100)
         case _:
             return
-    client.publish(light_switch['brightness_state_topic'], brightness)
-    client.publish(light_switch["effect_state_topic"], "OFF")
+    client.publish(light_switch['brightness_state_topic'], brightness, retain=True)
+    client.publish(light_switch["effect_state_topic"], "OFF", retain=True)
 
 
 def send_action(rf_code, rf_repeat=RF_REPEAT):
@@ -267,7 +257,7 @@ def on_connect(client: paho.Client, userdata, flags: paho.ConnectFlags, reason_c
         for entity in entities:
             entity.subscribe(client)
         for entity in entities:
-            entity.publish(client)
+            entity.initial_publish(client)
 
 
 def on_disconnect(client: paho.Client, userdata, flags: paho.DisconnectFlags, reason_code: paho.ReasonCode,
