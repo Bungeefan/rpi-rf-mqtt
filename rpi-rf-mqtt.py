@@ -11,6 +11,11 @@ import paho.mqtt.client as paho
 
 import config
 
+RF_GPIO_PIN = 17
+RF_PROTOCOL = 1
+RF_PULSE_LENGTH = 385
+RF_REPEAT = 10
+
 RF_CODE_ON = 13684993
 RF_CODE_OFF = 13684994
 
@@ -86,11 +91,11 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
 
     if msg.topic == brightness_plus_button["command_topic"]:
         if payload == "PRESS":
-            send_action(RF_CODE_BRIGHTNESS_PLUS)
+            send_action(RF_CODE_BRIGHTNESS_PLUS, 6)
 
     if msg.topic == brightness_minus_button["command_topic"]:
         if payload == "PRESS":
-            send_action(RF_CODE_BRIGHTNESS_MINUS)
+            send_action(RF_CODE_BRIGHTNESS_MINUS, 6)
 
 
 def set_brightness(client: paho.Client, brightness):
@@ -128,19 +133,20 @@ def on_subscribe(client: paho.Client, userdata, mid, reason_codes, properties: p
     print("Listening to topic:", userdata, mid, reason_codes, properties.json())
 
 
-def send_action(rf_code):
-    send_code(17, rf_code, 1, 385)
+def send_action(rf_code, rf_repeat=RF_REPEAT):
+    send_code(RF_GPIO_PIN, rf_code, RF_PROTOCOL, RF_PULSE_LENGTH, rf_repeat)
 
 
-def send_code(gpio_pin, rf_code, rf_protocol: int = 1, rf_pulse_length=None):
+def send_code(gpio_pin: int, rf_code, rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = 10):
     rf_device = None
     try:
         # Configure the RF transmitter
         rf_device = RFDevice(gpio_pin)
         rf_device.enable_tx()
+        rf_device.tx_repeat = rf_repeat
 
         # Send the code
-        rf_device.tx_code(rf_code, rf_protocol, rf_pulse_length)
+        rf_device.tx_code(rf_code, rf_protocol, tx_pulselength=rf_pulse_length)
     except NameError as e:
         print("'RFDevice' not accessible", e)
     finally:
