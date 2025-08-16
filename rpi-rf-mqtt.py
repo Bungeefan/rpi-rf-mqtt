@@ -342,13 +342,9 @@ if __name__ == '__main__':
     client.on_message = on_message
     # client.will_set(config.mqtt_topic_prefix + "/" + hostname + "/status", "0",
     #                 qos=config.qos, retain=config.retain)
-    try:
-        client.connect(config.mqtt_host, int(config.mqtt_port))
-    except Exception as e:
-        print("Error connecting to MQTT broker:", e)
-        sys.exit(1)
+    client.connect_async(config.mqtt_host, int(config.mqtt_port))
 
     try:
-        client.loop_forever()
+        client.loop_forever(retry_first_connection=True)
     except KeyboardInterrupt:
         print("Ctrl+C pressed. Exiting...")
