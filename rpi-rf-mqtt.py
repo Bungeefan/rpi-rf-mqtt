@@ -8,6 +8,7 @@ import time
 import typing
 import uuid
 
+import logging
 import paho.mqtt.client as paho
 
 import config
@@ -49,10 +50,18 @@ RF_CODE_PLUG_B_OFF = 3667925
 RF_CODE_PLUG_C_ON = 3466030
 RF_CODE_PLUG_C_OFF = 4005998
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+
 try:
     from rpi_rf import RFDevice
 except Exception as importExc:
-    print("Can't import RFDevice, actions won't work:", importExc)
+    logging.warn("Can't import RFDevice, actions won't work:", exc_info=importExc)
 
 
 class MqttEntity(dict):
@@ -181,7 +190,7 @@ def create_entities():
 
 def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
     payload = msg.payload.decode()
-    print("Received message:", msg.topic, payload)
+    logging.info("MQTT: Received message: %s %s", msg.topic, payload)
 
     if msg.topic == light_switch["command_topic"]:
         if payload == "ON":
@@ -283,13 +292,13 @@ def send_code(rf_code, rf_protocol: int = 1, rf_pulse_length: int = None, rf_rep
         rf_device.tx_repeat = rf_repeat
 
         # Send the code
-        print("Sending code:", rf_code, "with protocol:", rf_protocol, "pulse length:", rf_pulse_length, "repetitions:",
-              rf_repeat)
+        logging.info("Sending code: %s with protocol: %s, pulse_length: %s, repetitions: %s", rf_code, rf_protocol,
+                     rf_pulse_length, rf_repeat)
         success = rf_device.tx_code(rf_code, rf_protocol, tx_pulselength=rf_pulse_length)
         if not success:
-            print("Error: Failed to send code")
+            logging.error("Failed to send code")
     except NameError as e:
-        print("'RFDevice' not accessible", e)
+        logging.error("Unable to send code: 'RFDevice' not accessible", exc_info=e)
     finally:
         if rf_device is not None:
             rf_device.cleanup()
@@ -304,9 +313,9 @@ else:
 def on_connect(client: paho.Client, userdata, flags: paho.ConnectFlags, reason_code: paho.ReasonCode,
                properties: paho.Properties):
     if reason_code != 0:
-        print("Error: Unable to connect to MQTT broker, reason code:", reason_code)
+        logging.error("MQTT: Unable to connect to broker, reason code: %s", reason_code)
     else:
-        print("Connected to MQTT broker")
+        logging.info("MQTT: Connected to broker")
         for entity in entities:
             entity.subscribe(client)
         for entity in entities:
@@ -316,18 +325,14 @@ def on_connect(client: paho.Client, userdata, flags: paho.ConnectFlags, reason_c
 def on_disconnect(client: paho.Client, userdata, flags: paho.DisconnectFlags, reason_code: paho.ReasonCode,
                   properties: paho.Properties):
     if reason_code != 0:
-        print("Disconnected from MQTT broker, reason code:", reason_code)
+        logging.info("MQTT: Disconnected from broker, reason code: %s", reason_code)
     else:
-        print("Disconnected from MQTT broker")
+        logging.info("MQTT: Disconnected from broker")
 
 
 def on_log(client: paho.Client, userdata, level: int, msg: str):
-    if level == paho.MQTT_LOG_INFO:
-        print("MQTT info:", msg)
-    if level == paho.MQTT_LOG_WARNING:
-        print("MQTT warn:", msg)
-    if level == paho.MQTT_LOG_ERR:
-        print("MQTT error:", msg)
+    if level == paho.MQTT_LOG_DEBUG and "Connection" in msg:
+        logging.info("MQTT: %s", msg)
 
 
 if __name__ == '__main__':
@@ -335,6 +340,7 @@ if __name__ == '__main__':
 
     client = paho.Client(paho.CallbackAPIVersion.VERSION2,
                          client_id="rpi-rf-mqtt-" + hostname + "_" + str(int(time.time())))
+    client.enable_logger(logging.root)
     client.username_pw_set(config.mqtt_user, config.mqtt_password)
     client.on_log = on_log
     client.on_connect = on_connect
@@ -347,4 +353,4 @@ if __name__ == '__main__':
     try:
         client.loop_forever(retry_first_connection=True)
     except KeyboardInterrupt:
-        print("Ctrl+C pressed. Exiting...")
+        logging.info("Exiting...")
