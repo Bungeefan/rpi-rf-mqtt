@@ -72,7 +72,7 @@ class MqttEntity(dict):
 
     def initial_publish(self, client: paho.Client):
         if self["discovery_topic"] is not None:
-            client.publish(self["discovery_topic"], json.dumps(self))
+            client.publish(self["discovery_topic"], json.dumps(self), retain=True)
 
     def subscribe(self, client: paho.Client):
         if self["command_topic"] is not None:
