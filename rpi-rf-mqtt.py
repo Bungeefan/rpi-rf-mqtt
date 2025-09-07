@@ -61,7 +61,7 @@ logging.basicConfig(
 try:
     from rpi_rf import RFDevice
 except Exception as importExc:
-    logging.warn("Can't import RFDevice, actions won't work:", exc_info=importExc)
+    logging.warning("Can't import RFDevice, actions won't work:", exc_info=importExc)
 
 
 class MqttEntity(dict):
