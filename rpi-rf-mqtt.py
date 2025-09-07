@@ -72,7 +72,7 @@ class MqttEntity(dict):
 
     def initial_publish(self, client: paho.Client):
         if self["discovery_topic"] is not None:
-            client.publish(self["discovery_topic"], json.dumps(self), retain=True)
+            client.publish(self["discovery_topic"], json.dumps(self))
 
     def subscribe(self, client: paho.Client):
         if self["command_topic"] is not None:
@@ -190,7 +190,12 @@ def create_entities():
 
 def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
     payload = msg.payload.decode()
-    logging.info("MQTT: Received message: %s %s", msg.topic, payload)
+    logging.info("MQTT: Received message: %s %s, retain=%s", msg.topic, payload, msg.retain)
+
+    if config.mqtt_ha_birth_topic is not None:
+        if msg.topic == config.mqtt_ha_birth_topic and payload == config.mqtt_ha_birth_payload:
+            # TODO add a randomized delay
+            publish_entity_discovery_messages(client)
 
     if msg.topic == light_switch["command_topic"]:
         if payload == "ON":
@@ -310,16 +315,25 @@ else:
     hostname = re.sub(r'[^a-zA-Z0-9_-]', '_', socket.gethostname())
 
 
+def publish_entity_discovery_messages(client: paho.Client):
+    for entity in entities:
+        entity.initial_publish(client)
+    logging.info("MQTT: Published discovery messages")
+
+
 def on_connect(client: paho.Client, userdata, flags: paho.ConnectFlags, reason_code: paho.ReasonCode,
                properties: paho.Properties):
     if reason_code != 0:
         logging.error("MQTT: Unable to connect to broker, reason code: %s", reason_code)
     else:
         logging.info("MQTT: Connected to broker")
+        if config.mqtt_ha_birth_topic is not None and config.mqtt_ha_birth_payload is not None:
+            client.subscribe(config.mqtt_ha_birth_topic)
+        else:
+            publish_entity_discovery_messages(client)
+
         for entity in entities:
             entity.subscribe(client)
-        for entity in entities:
-            entity.initial_publish(client)
 
 
 def on_disconnect(client: paho.Client, userdata, flags: paho.DisconnectFlags, reason_code: paho.ReasonCode,
