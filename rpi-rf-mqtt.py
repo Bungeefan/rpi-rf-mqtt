@@ -5,7 +5,6 @@ import re
 import socket
 import sys
 import time
-import typing
 import uuid
 
 import logging
@@ -64,44 +63,56 @@ except Exception as importExc:
     logging.warning("Can't import RFDevice, actions won't work:", exc_info=importExc)
 
 
-class MqttEntity(dict):
-    def __init__(self, data=None, **kwargs):
-        if data is not None:
-            super().__init__(**data)  # Unpack the dictionary into the MqttEntity
-        super().__init__(**kwargs)
+class MqttEntity:
+    def __init__(self, entity_id: str, name: str, icon: str, component: str):
+        self.name = name
+        self.icon = icon
+        self.state_topic = f"{config.mqtt_topic_prefix}/{hostname}/{entity_id}"
+        self.command_topic = f"{config.mqtt_topic_prefix}/{hostname}/{entity_id}/set"
+        self.discovery_topic = f"{config.mqtt_discovery_prefix}/{component}/{hostname}/{entity_id}/config"
+        self.unique_id = f"{hostname}_{entity_id}"
+        self.device = build_device_info()
 
     def initial_publish(self, client: paho.Client):
-        if self["discovery_topic"] is not None:
-            client.publish(self["discovery_topic"], json.dumps(self))
+        if self.discovery_topic is not None:
+            client.publish(self.discovery_topic, json.dumps(vars(self)))
 
     def subscribe(self, client: paho.Client):
-        if self["command_topic"] is not None:
-            client.subscribe(self["command_topic"])
+        if self.command_topic is not None:
+            client.subscribe(self.command_topic)
+
+
+class Button(MqttEntity):
+    def __init__(self, entity_id: str, name: str, icon: str):
+        super().__init__(entity_id, name, icon, "button")
 
 
 class Switch(MqttEntity):
-    def __init__(self, data=None, **kwargs):
-        super().__init__(data, **kwargs)
+    def __init__(self, entity_id: str, name: str, icon: str):
+        super().__init__(entity_id, name, icon, "switch")
 
 
 class LightSwitch(MqttEntity):
-    def __init__(self, data=None, **kwargs):
-        super().__init__(data, **kwargs)
-
-    def initial_publish(self, client: paho.Client):
-        super().initial_publish(client)
-        # client.publish(self["availability_topic"], "online")
-        # client.publish(self["brightness_command_topic"], "OFF")
-        # time.sleep(1)
-        # client.publish(self["state_topic"], "OFF")
-        # client.publish(self["brightness_state_topic"], "0")
+    def __init__(self, entity_id: str, name: str, icon: str,
+                 brightness_scale: int = None, effects: list[str] = None):
+        super().__init__(entity_id, name, icon, "light")
+        self.brightness_state_topic = self.state_topic + "/brightness"
+        self.brightness_command_topic = self.brightness_state_topic + "/set"
+        if brightness_scale is not None:
+            self.brightness_scale = brightness_scale
+        if effects is not None and len(effects) > 0:
+            self.effect = True
+            effects.insert(0, "Off")
+            self.effect_list = effects
+            self.effect_state_topic = self.state_topic + "/effect"
+            self.effect_command_topic = self.effect_state_topic + "/set"
 
     def subscribe(self, client: paho.Client):
         super().subscribe(client)
-        client.subscribe(self["state_topic"])
-        client.subscribe(self["brightness_state_topic"])
-        client.subscribe(self["brightness_command_topic"])
-        client.subscribe(self["effect_command_topic"])
+        client.subscribe(self.state_topic)
+        client.subscribe(self.brightness_state_topic)
+        client.subscribe(self.brightness_command_topic)
+        client.subscribe(self.effect_command_topic)
 
 
 def get_mac_address():
@@ -118,65 +129,20 @@ def build_device_info():
     }
 
 
-def create_base_entity(id: str, name: str, icon: str, component: str, command: bool = False) -> dict[str, typing.Any]:
-    entity = {
-        "state_topic": f"{config.mqtt_topic_prefix}/{hostname}/{id}",
-        "discovery_topic": f"{config.mqtt_discovery_prefix}/{component}/{hostname}/{id}/config",
-        "unique_id": f"{hostname}_{id}",
-        "device": build_device_info()
-    }
-
-    if name:
-        entity["name"] = name
-    if icon:
-        entity["icon"] = icon
-    if command:
-        entity["command_topic"] = f"{config.mqtt_topic_prefix}/{hostname}/{id}/set"
-
-    # entity["availability_topic"] = f"{entity['state_topic']}_availability"
-
-    return entity
-
-
-def create_button(id: str, name: str, icon: str):
-    return MqttEntity(create_base_entity(id, name, icon, "button", True))
-
-
-def create_switch(id: str, name: str, icon: str):
-    return Switch(create_base_entity(id, name, icon, "switch", True))
-
-
-def create_light_switch(id: str, name: str, icon: str, brightness_scale: int = None,
-                        effects: list[str] = None) -> LightSwitch:
-    data = create_base_entity(id, name, icon, 'light', True)
-    data["brightness_state_topic"] = data['state_topic'] + "/brightness"
-    data["brightness_command_topic"] = data["brightness_state_topic"] + "/set"
-    if brightness_scale is not None:
-        data["brightness_scale"] = brightness_scale
-    if effects is not None and len(effects) > 0:
-        data["effect"] = True
-        effects.insert(0, "Off")
-        data["effect_list"] = effects
-        data["effect_state_topic"] = data["state_topic"] + "/effect"
-        data["effect_command_topic"] = data["effect_state_topic"] + "/set"
-
-    return LightSwitch(data)
-
-
 def create_entities():
     global entities, light_switch, delay_off_button, brightness_plus_button, brightness_minus_button, plug_a, plug_b, plug_c
 
-    # on_off_switch = create_switch('on_off', "LED Element", "mdi:lightbulb")
+    # on_off_switch = Switch('on_off', "LED Element", "mdi:lightbulb")
 
-    light_switch = create_light_switch('light_switch', "LED Element", "mdi:lightbulb", 6, ["Jump", "Fade", "Strobe"])
+    light_switch = LightSwitch('light_switch', "LED Element", "mdi:lightbulb", 6, ["Jump", "Fade", "Strobe"])
 
-    delay_off_button = create_button('delay_off_button', "60s Delay OFF", "mdi:lightbulb-off-outline")
-    brightness_plus_button = create_button('brightness_plus_button', "Brightness+", "mdi:brightness-7")
-    brightness_minus_button = create_button('brightness_minus_button', "Brightness-", "mdi:brightness-5")
+    delay_off_button = Button('delay_off_button', "60s Delay OFF", "mdi:lightbulb-off-outline")
+    brightness_plus_button = Button('brightness_plus_button', "Brightness+", "mdi:brightness-7")
+    brightness_minus_button = Button('brightness_minus_button', "Brightness-", "mdi:brightness-5")
 
-    plug_a = create_switch('wireless_plug_a', 'Plug A', 'mdi:power')
-    plug_b = create_switch('wireless_plug_b', 'Plug B', 'mdi:power')
-    plug_c = create_switch('wireless_plug_c', 'Plug C', 'mdi:power')
+    plug_a = Switch('wireless_plug_a', 'Plug A', 'mdi:power')
+    plug_b = Switch('wireless_plug_b', 'Plug B', 'mdi:power')
+    plug_c = Switch('wireless_plug_c', 'Plug C', 'mdi:power')
 
     entities = [
         light_switch,
@@ -199,87 +165,87 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
             # TODO add a randomized delay
             publish_entity_discovery_messages(client)
 
-    if msg.topic == light_switch["state_topic"]:
-        light_switch["state"] = payload
+    if msg.topic == light_switch.state_topic:
+        light_switch.state = payload
 
-    if msg.topic == light_switch["brightness_state_topic"]:
-        light_switch["brightness_state"] = int(payload)
+    if msg.topic == light_switch.brightness_state_topic:
+        light_switch.brightness_state = int(payload)
 
-    if msg.topic == light_switch["command_topic"]:
+    if msg.topic == light_switch.command_topic:
         if payload == "ON":
             send_led_action(RF_CODE_ON)
-            if light_switch["state"] == "OFF" and light_switch["brightness_state"] is not None:
-                send_brightness(light_switch["brightness_state"])
-            client.publish(light_switch['state_topic'], payload, retain=True)
+            if light_switch.state == "OFF" and light_switch.brightness_state is not None:
+                send_brightness(light_switch.brightness_state)
+            client.publish(light_switch.state_topic, payload, retain=True)
 
         elif payload == "OFF":
             send_led_action(RF_CODE_OFF)
-            client.publish(light_switch['state_topic'], payload, retain=True)
+            client.publish(light_switch.state_topic, payload, retain=True)
 
-    if msg.topic == light_switch["brightness_command_topic"]:
-        if light_switch["state"] != "ON":
-            light_switch["state"] = "ON" # otherwise there is a race-condition between publishing and receiving as HA first sends a brightness command THEN a state command
+    if msg.topic == light_switch.brightness_command_topic:
+        if light_switch.state != "ON":
+            light_switch.state = "ON"  # otherwise there is a race-condition between publishing and receiving as HA first sends a brightness command THEN a state command
             send_led_action(RF_CODE_ON)
-            client.publish(light_switch['state_topic'], "ON", retain=True)
+            client.publish(light_switch.state_topic, "ON", retain=True)
         brightness = int(payload)
         set_brightness(client, brightness)
 
-    if msg.topic == light_switch["effect_command_topic"]:
+    if msg.topic == light_switch.effect_command_topic:
         if payload == "Jump":
             send_led_action(RF_CODE_JUMP)
-            client.publish(light_switch["effect_state_topic"], payload, retain=True)
+            client.publish(light_switch.effect_state_topic, payload, retain=True)
         elif payload == "Fade":
             send_led_action(RF_CODE_FADE)
-            client.publish(light_switch["effect_state_topic"], payload, retain=True)
+            client.publish(light_switch.effect_state_topic, payload, retain=True)
         elif payload == "Strobe":
             send_led_action(RF_CODE_STROBE)
-            client.publish(light_switch["effect_state_topic"], payload, retain=True)
+            client.publish(light_switch.effect_state_topic, payload, retain=True)
         elif payload == "Off":
             set_brightness(client, 1)
-            client.publish(light_switch["effect_state_topic"], "OFF", retain=True)
+            client.publish(light_switch.effect_state_topic, "OFF", retain=True)
 
-    if msg.topic == delay_off_button["command_topic"]:
+    if msg.topic == delay_off_button.command_topic:
         if payload == "PRESS":
             send_led_action(RF_CODE_60S_OFF)
 
-    if msg.topic == brightness_plus_button["command_topic"]:
+    if msg.topic == brightness_plus_button.command_topic:
         if payload == "PRESS":
             send_led_action(RF_CODE_BRIGHTNESS_PLUS, 6)
 
-    if msg.topic == brightness_minus_button["command_topic"]:
+    if msg.topic == brightness_minus_button.command_topic:
         if payload == "PRESS":
             send_led_action(RF_CODE_BRIGHTNESS_MINUS, 6)
 
-    if msg.topic == plug_a["command_topic"]:
+    if msg.topic == plug_a.command_topic:
         if payload == "ON":
             send_plug_action(RF_CODE_PLUG_A_ON)
-            client.publish(plug_a['state_topic'], payload, retain=True)
+            client.publish(plug_a.state_topic, payload, retain=True)
         elif payload == "OFF":
             send_plug_action(RF_CODE_PLUG_A_OFF)
-            client.publish(plug_a['state_topic'], payload, retain=True)
+            client.publish(plug_a.state_topic, payload, retain=True)
 
-    if msg.topic == plug_b["command_topic"]:
+    if msg.topic == plug_b.command_topic:
         if payload == "ON":
             send_plug_action(RF_CODE_PLUG_B_ON)
-            client.publish(plug_b['state_topic'], payload, retain=True)
+            client.publish(plug_b.state_topic, payload, retain=True)
         elif payload == "OFF":
             send_plug_action(RF_CODE_PLUG_B_OFF)
-            client.publish(plug_b['state_topic'], payload, retain=True)
+            client.publish(plug_b.state_topic, payload, retain=True)
 
-    if msg.topic == plug_c["command_topic"]:
+    if msg.topic == plug_c.command_topic:
         if payload == "ON":
             send_plug_action(RF_CODE_PLUG_C_ON)
-            client.publish(plug_c['state_topic'], payload, retain=True)
+            client.publish(plug_c.state_topic, payload, retain=True)
         elif payload == "OFF":
             send_plug_action(RF_CODE_PLUG_C_OFF)
-            client.publish(plug_c['state_topic'], payload, retain=True)
+            client.publish(plug_c.state_topic, payload, retain=True)
 
 
 def set_brightness(client: paho.Client, brightness: int):
     success = send_brightness(brightness)
     if success:
-        client.publish(light_switch['brightness_state_topic'], brightness, retain=True)
-        client.publish(light_switch["effect_state_topic"], "OFF", retain=True)
+        client.publish(light_switch.brightness_state_topic, brightness, retain=True)
+        client.publish(light_switch.effect_state_topic, "OFF", retain=True)
 
 
 def send_brightness(brightness: int) -> bool:
