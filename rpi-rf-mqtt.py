@@ -100,11 +100,14 @@ class Button(MqttEntity):
     def handle_message(self, client: paho.Client, topic: str, payload):
         if topic == self.command_topic:
             if payload == "PRESS":
-                send_code(self.rf_code, self.rf_protocol, self.rf_pulse_length, self.rf_repeat)
+                self.send_action(self.rf_code)
+
+    def send_action(self, rf_code: int):
+        send_code(rf_code, self.rf_protocol, self.rf_pulse_length, self.rf_repeat)
 
 
 class Switch(MqttEntity):
-    def __init__(self, entity_id: str, name: str, icon: str, rf_code_on, rf_code_off, rf_protocol: int = 1,
+    def __init__(self, entity_id: str, name: str, icon: str, rf_code_on: int, rf_code_off: int, rf_protocol: int = 1,
                  rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
         super().__init__(entity_id, name, icon, "switch")
         self.rf_code_on = rf_code_on
@@ -116,25 +119,39 @@ class Switch(MqttEntity):
     def handle_message(self, client: paho.Client, topic: str, payload):
         if topic == self.command_topic:
             if payload == "ON":
-                send_code(self.rf_code_on, self.rf_protocol, self.rf_pulse_length, self.rf_repeat)
+                self.send_action(self.rf_code_on)
                 client.publish(self.state_topic, payload, retain=True)
             elif payload == "OFF":
-                send_code(self.rf_code_off, self.rf_protocol, self.rf_pulse_length, self.rf_repeat)
+                self.send_action(self.rf_code_off)
                 client.publish(self.state_topic, payload, retain=True)
+
+    def send_action(self, rf_code: int):
+        send_code(rf_code, self.rf_protocol, self.rf_pulse_length, self.rf_repeat)
 
 
 class LightSwitch(MqttEntity):
-    def __init__(self, entity_id: str, name: str, icon: str,
-                 brightness_scale: int = None, effects: list[str] = None):
+    def __init__(self, entity_id: str, name: str, icon: str, rf_code_on: int, rf_code_off: int,
+                 brightness_codes: list[int] = None, effects: dict[str, int] = None,
+                 rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
         super().__init__(entity_id, name, icon, "light")
+        self.state = None
+        self.brightness_state = None
+
+        self.rf_code_on = rf_code_on
+        self.rf_code_off = rf_code_off
+        self.rf_protocol = rf_protocol
+        self.rf_pulse_length = rf_pulse_length
+        self.rf_repeat = rf_repeat
+
         self.brightness_state_topic = self.state_topic + "/brightness"
         self.brightness_command_topic = self.brightness_state_topic + "/set"
-        if brightness_scale is not None:
-            self.brightness_scale = brightness_scale
+        if brightness_codes is not None:
+            self.brightness_codes = brightness_codes
+            self.brightness_scale = len(brightness_codes)
         if effects is not None and len(effects) > 0:
-            self.effect = True
-            effects.insert(0, "Off")
-            self.effect_list = effects
+            effects.update({"Off": -1})
+            self.effects = effects
+            self.effect_list = list(effects.keys())
             self.effect_state_topic = self.state_topic + "/effect"
             self.effect_command_topic = self.effect_state_topic + "/set"
 
@@ -146,7 +163,57 @@ class LightSwitch(MqttEntity):
         client.subscribe(self.effect_command_topic)
 
     def handle_message(self, client: paho.Client, topic: str, payload):
-        pass
+        if topic == self.state_topic:
+            self.state = payload
+        if topic == self.brightness_state_topic:
+            self.brightness_state = int(payload)
+
+        if topic == self.command_topic:
+            if payload == "ON":
+                self.send_action(self.rf_code_on)
+                if self.state == "OFF" and self.brightness_state is not None:
+                    self.send_brightness(self.brightness_state)
+                client.publish(self.state_topic, payload, retain=True)
+
+            elif payload == "OFF":
+                self.send_action(self.rf_code_off)
+                client.publish(self.state_topic, payload, retain=True)
+
+        if topic == self.brightness_command_topic:
+            if self.state != "ON":
+                self.state = "ON"  # otherwise there is a race-condition between publishing and receiving as HA first sends a brightness command THEN a state command
+                self.send_action(self.rf_code_on)
+                client.publish(self.state_topic, "ON", retain=True)
+            brightness = int(payload)
+            self.set_brightness(client, brightness)
+
+        if topic == self.effect_command_topic:
+            if payload == "Off":
+                self.set_brightness(client, 1)
+                client.publish(self.effect_state_topic, "OFF", retain=True)
+                return
+
+            rf_code = self.effects[payload]
+            if rf_code is not None:
+                self.send_action(rf_code)
+                client.publish(self.effect_state_topic, payload, retain=True)
+
+    def send_brightness(self, brightness: int) -> bool:
+        brightness -= 1
+        if len(self.brightness_codes) > brightness >= 0:
+            rf_code = self.brightness_codes[brightness]
+            self.send_action(rf_code)
+            return True
+        return False
+
+    def set_brightness(self, client: paho.Client, brightness: int):
+        success = self.send_brightness(brightness)
+        if success:
+            client.publish(self.brightness_state_topic, brightness, retain=True)
+            client.publish(self.effect_state_topic, "OFF", retain=True)
+
+    def send_action(self, rf_code: int):
+        send_code(rf_code, self.rf_protocol, self.rf_pulse_length, self.rf_repeat)
 
 
 def get_mac_address():
@@ -168,7 +235,22 @@ def create_entities():
 
     # on_off_switch = Switch('on_off', "LED Element", "mdi:lightbulb")
 
-    light_switch = LightSwitch('light_switch', "LED Element", "mdi:lightbulb", 6, ["Jump", "Fade", "Strobe"])
+    light_switch = LightSwitch('light_switch', "LED Element", "mdi:lightbulb",
+                               RF_CODE_ON, RF_CODE_OFF,
+                               [
+                                   RF_CODE_BRIGHTNESS_10,
+                                   RF_CODE_BRIGHTNESS_20,
+                                   RF_CODE_BRIGHTNESS_40,
+                                   RF_CODE_BRIGHTNESS_60,
+                                   RF_CODE_BRIGHTNESS_80,
+                                   RF_CODE_BRIGHTNESS_100
+                               ],
+                               {
+                                   "Jump": RF_CODE_JUMP,
+                                   "Fade": RF_CODE_FADE,
+                                   "Strobe": RF_CODE_STROBE,
+                               },
+                               RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH)
 
     delay_off_button = Button('delay_off_button', "60s Delay OFF", "mdi:lightbulb-off-outline", RF_CODE_60S_OFF,
                               RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH)
@@ -205,44 +287,7 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
             # TODO add a randomized delay
             publish_entity_discovery_messages(client)
 
-    if msg.topic == light_switch.state_topic:
-        light_switch.state = payload
-
-    if msg.topic == light_switch.brightness_state_topic:
-        light_switch.brightness_state = int(payload)
-
-    if msg.topic == light_switch.command_topic:
-        if payload == "ON":
-            send_led_action(RF_CODE_ON)
-            if light_switch.state == "OFF" and light_switch.brightness_state is not None:
-                send_brightness(light_switch.brightness_state)
-            client.publish(light_switch.state_topic, payload, retain=True)
-
-        elif payload == "OFF":
-            send_led_action(RF_CODE_OFF)
-            client.publish(light_switch.state_topic, payload, retain=True)
-
-    if msg.topic == light_switch.brightness_command_topic:
-        if light_switch.state != "ON":
-            light_switch.state = "ON"  # otherwise there is a race-condition between publishing and receiving as HA first sends a brightness command THEN a state command
-            send_led_action(RF_CODE_ON)
-            client.publish(light_switch.state_topic, "ON", retain=True)
-        brightness = int(payload)
-        set_brightness(client, brightness)
-
-    if msg.topic == light_switch.effect_command_topic:
-        if payload == "Jump":
-            send_led_action(RF_CODE_JUMP)
-            client.publish(light_switch.effect_state_topic, payload, retain=True)
-        elif payload == "Fade":
-            send_led_action(RF_CODE_FADE)
-            client.publish(light_switch.effect_state_topic, payload, retain=True)
-        elif payload == "Strobe":
-            send_led_action(RF_CODE_STROBE)
-            client.publish(light_switch.effect_state_topic, payload, retain=True)
-        elif payload == "Off":
-            set_brightness(client, 1)
-            client.publish(light_switch.effect_state_topic, "OFF", retain=True)
+    light_switch.handle_message(client, msg.topic, payload)
 
     delay_off_button.handle_message(client, msg.topic, payload)
     brightness_plus_button.handle_message(client, msg.topic, payload)
@@ -251,38 +296,6 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
     plug_a.handle_message(client, msg.topic, payload)
     plug_b.handle_message(client, msg.topic, payload)
     plug_c.handle_message(client, msg.topic, payload)
-
-
-def set_brightness(client: paho.Client, brightness: int):
-    success = send_brightness(brightness)
-    if success:
-        client.publish(light_switch.brightness_state_topic, brightness, retain=True)
-        client.publish(light_switch.effect_state_topic, "OFF", retain=True)
-
-
-def send_brightness(brightness: int) -> bool:
-    rf_code: int | None = None
-    match brightness:
-        case 1:
-            rf_code = RF_CODE_BRIGHTNESS_10
-        case 2:
-            rf_code = RF_CODE_BRIGHTNESS_20
-        case 3:
-            rf_code = RF_CODE_BRIGHTNESS_40
-        case 4:
-            rf_code = RF_CODE_BRIGHTNESS_60
-        case 5:
-            rf_code = RF_CODE_BRIGHTNESS_80
-        case 6:
-            rf_code = RF_CODE_BRIGHTNESS_100
-    if rf_code is not None:
-        send_led_action(rf_code)
-        return True
-    return False
-
-
-def send_led_action(rf_code, rf_repeat=RF_REPEAT):
-    send_code(rf_code, RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH, rf_repeat)
 
 
 def send_code(rf_code, rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
