@@ -230,6 +230,27 @@ def build_device_info():
     }
 
 
+def send_code(rf_code, rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
+    rf_device = None
+    try:
+        # Configure the RF transmitter
+        rf_device = RFDevice(RF_GPIO_PIN)
+        rf_device.enable_tx()
+        rf_device.tx_repeat = rf_repeat
+
+        # Send the code
+        logging.info("Sending code: %s with protocol: %s, pulse_length: %s, repetitions: %s", rf_code, rf_protocol,
+                     rf_pulse_length, rf_repeat)
+        success = rf_device.tx_code(rf_code, rf_protocol, tx_pulselength=rf_pulse_length)
+        if not success:
+            logging.error("Failed to send code")
+    except NameError as e:
+        logging.error("Unable to send code: 'RFDevice' not accessible", exc_info=e)
+    finally:
+        if rf_device is not None:
+            rf_device.cleanup()
+
+
 def create_entities():
     global entities, light_switch, delay_off_button, brightness_plus_button, brightness_minus_button, plug_a, plug_b, plug_c
 
@@ -287,36 +308,8 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
             # TODO add a randomized delay
             publish_entity_discovery_messages(client)
 
-    light_switch.handle_message(client, msg.topic, payload)
-
-    delay_off_button.handle_message(client, msg.topic, payload)
-    brightness_plus_button.handle_message(client, msg.topic, payload)
-    brightness_minus_button.handle_message(client, msg.topic, payload)
-
-    plug_a.handle_message(client, msg.topic, payload)
-    plug_b.handle_message(client, msg.topic, payload)
-    plug_c.handle_message(client, msg.topic, payload)
-
-
-def send_code(rf_code, rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
-    rf_device = None
-    try:
-        # Configure the RF transmitter
-        rf_device = RFDevice(RF_GPIO_PIN)
-        rf_device.enable_tx()
-        rf_device.tx_repeat = rf_repeat
-
-        # Send the code
-        logging.info("Sending code: %s with protocol: %s, pulse_length: %s, repetitions: %s", rf_code, rf_protocol,
-                     rf_pulse_length, rf_repeat)
-        success = rf_device.tx_code(rf_code, rf_protocol, tx_pulselength=rf_pulse_length)
-        if not success:
-            logging.error("Failed to send code")
-    except NameError as e:
-        logging.error("Unable to send code: 'RFDevice' not accessible", exc_info=e)
-    finally:
-        if rf_device is not None:
-            rf_device.cleanup()
+    for entity in entities:
+        entity.handle_message(client, msg.topic, payload)
 
 
 if hasattr(config, 'ha_device_name') and config.ha_device_name:
