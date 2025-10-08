@@ -8,6 +8,8 @@ import time
 import uuid
 
 import logging
+from abc import ABC, abstractmethod
+
 import paho.mqtt.client as paho
 
 import config
@@ -63,7 +65,7 @@ except Exception as importExc:
     logging.warning("Can't import RFDevice, actions won't work:", exc_info=importExc)
 
 
-class MqttEntity:
+class MqttEntity(ABC):
     def __init__(self, entity_id: str, name: str, icon: str, component: str):
         self.name = name
         self.icon = icon
@@ -81,15 +83,44 @@ class MqttEntity:
         if self.command_topic is not None:
             client.subscribe(self.command_topic)
 
+    @abstractmethod
+    def handle_message(self, client: paho.Client, topic: str, payload):
+        pass
+
 
 class Button(MqttEntity):
-    def __init__(self, entity_id: str, name: str, icon: str):
+    def __init__(self, entity_id: str, name: str, icon: str, rf_code: int, rf_protocol: int = 1,
+                 rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
         super().__init__(entity_id, name, icon, "button")
+        self.rf_code = rf_code
+        self.rf_protocol = rf_protocol
+        self.rf_pulse_length = rf_pulse_length
+        self.rf_repeat = rf_repeat
+
+    def handle_message(self, client: paho.Client, topic: str, payload):
+        if topic == self.command_topic:
+            if payload == "PRESS":
+                send_code(self.rf_code, self.rf_protocol, self.rf_pulse_length, self.rf_repeat)
 
 
 class Switch(MqttEntity):
-    def __init__(self, entity_id: str, name: str, icon: str):
+    def __init__(self, entity_id: str, name: str, icon: str, rf_code_on, rf_code_off, rf_protocol: int = 1,
+                 rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
         super().__init__(entity_id, name, icon, "switch")
+        self.rf_code_on = rf_code_on
+        self.rf_code_off = rf_code_off
+        self.rf_protocol = rf_protocol
+        self.rf_pulse_length = rf_pulse_length
+        self.rf_repeat = rf_repeat
+
+    def handle_message(self, client: paho.Client, topic: str, payload):
+        if topic == self.command_topic:
+            if payload == "ON":
+                send_code(self.rf_code_on, self.rf_protocol, self.rf_pulse_length, self.rf_repeat)
+                client.publish(self.state_topic, payload, retain=True)
+            elif payload == "OFF":
+                send_code(self.rf_code_off, self.rf_protocol, self.rf_pulse_length, self.rf_repeat)
+                client.publish(self.state_topic, payload, retain=True)
 
 
 class LightSwitch(MqttEntity):
@@ -114,6 +145,9 @@ class LightSwitch(MqttEntity):
         client.subscribe(self.brightness_command_topic)
         client.subscribe(self.effect_command_topic)
 
+    def handle_message(self, client: paho.Client, topic: str, payload):
+        pass
+
 
 def get_mac_address():
     mac_num = uuid.getnode()
@@ -136,13 +170,19 @@ def create_entities():
 
     light_switch = LightSwitch('light_switch', "LED Element", "mdi:lightbulb", 6, ["Jump", "Fade", "Strobe"])
 
-    delay_off_button = Button('delay_off_button', "60s Delay OFF", "mdi:lightbulb-off-outline")
-    brightness_plus_button = Button('brightness_plus_button', "Brightness+", "mdi:brightness-7")
-    brightness_minus_button = Button('brightness_minus_button', "Brightness-", "mdi:brightness-5")
+    delay_off_button = Button('delay_off_button', "60s Delay OFF", "mdi:lightbulb-off-outline", RF_CODE_60S_OFF,
+                              RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH)
+    brightness_plus_button = Button('brightness_plus_button', "Brightness+", "mdi:brightness-7",
+                                    RF_CODE_BRIGHTNESS_PLUS, RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH, 6)
+    brightness_minus_button = Button('brightness_minus_button', "Brightness-", "mdi:brightness-5",
+                                     RF_CODE_BRIGHTNESS_MINUS, RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH, 6)
 
-    plug_a = Switch('wireless_plug_a', 'Plug A', 'mdi:power')
-    plug_b = Switch('wireless_plug_b', 'Plug B', 'mdi:power')
-    plug_c = Switch('wireless_plug_c', 'Plug C', 'mdi:power')
+    plug_a = Switch('wireless_plug_a', 'Plug A', 'mdi:power', RF_CODE_PLUG_A_ON, RF_CODE_PLUG_A_OFF, RF_PLUG_PROTOCOL,
+                    RF_PLUG_PULSE_LENGTH)
+    plug_b = Switch('wireless_plug_b', 'Plug B', 'mdi:power', RF_CODE_PLUG_B_ON, RF_CODE_PLUG_B_OFF, RF_PLUG_PROTOCOL,
+                    RF_PLUG_PULSE_LENGTH)
+    plug_c = Switch('wireless_plug_c', 'Plug C', 'mdi:power', RF_CODE_PLUG_C_ON, RF_CODE_PLUG_C_OFF, RF_PLUG_PROTOCOL,
+                    RF_PLUG_PULSE_LENGTH)
 
     entities = [
         light_switch,
@@ -204,41 +244,13 @@ def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
             set_brightness(client, 1)
             client.publish(light_switch.effect_state_topic, "OFF", retain=True)
 
-    if msg.topic == delay_off_button.command_topic:
-        if payload == "PRESS":
-            send_led_action(RF_CODE_60S_OFF)
+    delay_off_button.handle_message(client, msg.topic, payload)
+    brightness_plus_button.handle_message(client, msg.topic, payload)
+    brightness_minus_button.handle_message(client, msg.topic, payload)
 
-    if msg.topic == brightness_plus_button.command_topic:
-        if payload == "PRESS":
-            send_led_action(RF_CODE_BRIGHTNESS_PLUS, 6)
-
-    if msg.topic == brightness_minus_button.command_topic:
-        if payload == "PRESS":
-            send_led_action(RF_CODE_BRIGHTNESS_MINUS, 6)
-
-    if msg.topic == plug_a.command_topic:
-        if payload == "ON":
-            send_plug_action(RF_CODE_PLUG_A_ON)
-            client.publish(plug_a.state_topic, payload, retain=True)
-        elif payload == "OFF":
-            send_plug_action(RF_CODE_PLUG_A_OFF)
-            client.publish(plug_a.state_topic, payload, retain=True)
-
-    if msg.topic == plug_b.command_topic:
-        if payload == "ON":
-            send_plug_action(RF_CODE_PLUG_B_ON)
-            client.publish(plug_b.state_topic, payload, retain=True)
-        elif payload == "OFF":
-            send_plug_action(RF_CODE_PLUG_B_OFF)
-            client.publish(plug_b.state_topic, payload, retain=True)
-
-    if msg.topic == plug_c.command_topic:
-        if payload == "ON":
-            send_plug_action(RF_CODE_PLUG_C_ON)
-            client.publish(plug_c.state_topic, payload, retain=True)
-        elif payload == "OFF":
-            send_plug_action(RF_CODE_PLUG_C_OFF)
-            client.publish(plug_c.state_topic, payload, retain=True)
+    plug_a.handle_message(client, msg.topic, payload)
+    plug_b.handle_message(client, msg.topic, payload)
+    plug_c.handle_message(client, msg.topic, payload)
 
 
 def set_brightness(client: paho.Client, brightness: int):
@@ -271,10 +283,6 @@ def send_brightness(brightness: int) -> bool:
 
 def send_led_action(rf_code, rf_repeat=RF_REPEAT):
     send_code(rf_code, RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH, rf_repeat)
-
-
-def send_plug_action(rf_code, rf_repeat=RF_REPEAT):
-    send_code(rf_code, RF_PLUG_PROTOCOL, RF_PLUG_PULSE_LENGTH, rf_repeat)
 
 
 def send_code(rf_code, rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
