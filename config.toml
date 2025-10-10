@@ -1,0 +1,47 @@
+[mqtt]
+host = "localhost"
+user = "rf_pi"
+password = "<password>"
+port = "1883"
+topic_prefix = "rpi-rf-MQTT"
+qos = 0
+
+[ha]
+device_name = 'test_mqtt'
+discovery_prefix = "homeassistant"
+birth_topic = "homeassistant/status"
+birth_payload = "online"
+will_topic = "homeassistant/status"
+will_payload = "offline"
+
+[rf]
+gpio_pin = 17
+protocol = 1
+repeat = 10
+
+[entities.example_light]
+type = "light"
+name = "Light"
+icon = "mdi:lightbulb"
+rf_code_on = 1
+rf_code_off = 2
+brightness_levels = [3, 4, 5]
+effects = { "Effect 1" = 6, "Effect 2" = 7, "Effect 3" = 8 }
+rf_protocol = 1
+rf_pulse_length = 340
+
+[entities.example_button]
+type = "button"
+name = "Button"
+icon = "mdi:button-pointer"
+rf_code = 10
+rf_protocol = 2
+
+[entities.example_switch]
+type = "switch"
+name = "Switch"
+icon = "mdi:toggle-switch-off-outline"
+rf_code_on = 1
+rf_code_off = 2
+rf_protocol = 4
+rf_pulse_length = 340

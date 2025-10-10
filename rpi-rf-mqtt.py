@@ -5,51 +5,13 @@ import re
 import socket
 import sys
 import time
+import tomllib
 import uuid
 
 import logging
 from abc import ABC, abstractmethod
 
 import paho.mqtt.client as paho
-
-import config
-
-RF_GPIO_PIN = 17
-RF_REPEAT = 10
-
-RF_LED_PROTOCOL = 1
-RF_LED_PULSE_LENGTH = 385
-
-RF_CODE_ON = 13684993
-RF_CODE_OFF = 13684994
-
-RF_CODE_BRIGHTNESS_PLUS = 13684996
-RF_CODE_BRIGHTNESS_MINUS = 13684997
-
-RF_CODE_60S_OFF = 13684998
-
-RF_CODE_BRIGHTNESS_10 = 13684999
-RF_CODE_BRIGHTNESS_20 = 13685000
-RF_CODE_BRIGHTNESS_40 = 13685001
-RF_CODE_BRIGHTNESS_60 = 13685002
-RF_CODE_BRIGHTNESS_80 = 13685003
-RF_CODE_BRIGHTNESS_100 = 13685004
-
-RF_CODE_JUMP = 13685005
-RF_CODE_FADE = 13685006
-RF_CODE_STROBE = 13685007
-
-RF_PLUG_PROTOCOL = 4
-RF_PLUG_PULSE_LENGTH = 340
-
-RF_CODE_PLUG_A_ON = 3323996
-RF_CODE_PLUG_A_OFF = 4099212
-
-RF_CODE_PLUG_B_ON = 3513605
-RF_CODE_PLUG_B_OFF = 3667925
-
-RF_CODE_PLUG_C_ON = 3466030
-RF_CODE_PLUG_C_OFF = 4005998
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,11 +31,14 @@ class MqttEntity(ABC):
     def __init__(self, entity_id: str, name: str, icon: str, component: str):
         self.name = name
         self.icon = icon
-        self.state_topic = f"{config.mqtt_topic_prefix}/{hostname}/{entity_id}"
-        self.command_topic = f"{config.mqtt_topic_prefix}/{hostname}/{entity_id}/set"
-        self.discovery_topic = f"{config.mqtt_discovery_prefix}/{component}/{hostname}/{entity_id}/config"
-        self.unique_id = f"{hostname}_{entity_id}"
+        self.state_topic = f'{config["mqtt"]["topic_prefix"]}/{hostname}/{entity_id}'
+        self.command_topic = f'{config["mqtt"]["topic_prefix"]}/{hostname}/{entity_id}/set'
+        self.discovery_topic = f'{config["ha"]["discovery_prefix"]}/{component}/{hostname}/{entity_id}/config'
+        self.unique_id = f'{hostname}_{entity_id}'
         self.device = build_device_info()
+
+    def __str__(self):
+        return str(vars(self))
 
     def initial_publish(self, client: paho.Client):
         if self.discovery_topic is not None:
@@ -90,7 +55,8 @@ class MqttEntity(ABC):
 
 class Button(MqttEntity):
     def __init__(self, entity_id: str, name: str, icon: str, rf_code: int, rf_protocol: int = 1,
-                 rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
+                 rf_pulse_length: int = None,
+                 rf_repeat: int = None):
         super().__init__(entity_id, name, icon, "button")
         self.rf_code = rf_code
         self.rf_protocol = rf_protocol
@@ -108,7 +74,7 @@ class Button(MqttEntity):
 
 class Switch(MqttEntity):
     def __init__(self, entity_id: str, name: str, icon: str, rf_code_on: int, rf_code_off: int, rf_protocol: int = 1,
-                 rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
+                 rf_pulse_length: int = None, rf_repeat: int = None):
         super().__init__(entity_id, name, icon, "switch")
         self.rf_code_on = rf_code_on
         self.rf_code_off = rf_code_off
@@ -132,7 +98,7 @@ class Switch(MqttEntity):
 class LightSwitch(MqttEntity):
     def __init__(self, entity_id: str, name: str, icon: str, rf_code_on: int, rf_code_off: int,
                  brightness_codes: list[int] = None, effects: dict[str, int] = None,
-                 rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
+                 rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = None):
         super().__init__(entity_id, name, icon, "light")
         self.state = None
         self.brightness_state = None
@@ -230,11 +196,14 @@ def build_device_info():
     }
 
 
-def send_code(rf_code, rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = RF_REPEAT):
+def send_code(rf_code, rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = None):
     rf_device = None
     try:
+        if rf_repeat is None:
+            rf_repeat = default_rf_repeat
+
         # Configure the RF transmitter
-        rf_device = RFDevice(RF_GPIO_PIN)
+        rf_device = RFDevice(rf_gpio_pin)
         rf_device.enable_tx()
         rf_device.tx_repeat = rf_repeat
 
@@ -251,71 +220,61 @@ def send_code(rf_code, rf_protocol: int = 1, rf_pulse_length: int = None, rf_rep
             rf_device.cleanup()
 
 
-def create_entities():
-    global entities, light_switch, delay_off_button, brightness_plus_button, brightness_minus_button, plug_a, plug_b, plug_c
-
-    # on_off_switch = Switch('on_off', "LED Element", "mdi:lightbulb")
-
-    light_switch = LightSwitch('light_switch', "LED Element", "mdi:lightbulb",
-                               RF_CODE_ON, RF_CODE_OFF,
-                               [
-                                   RF_CODE_BRIGHTNESS_10,
-                                   RF_CODE_BRIGHTNESS_20,
-                                   RF_CODE_BRIGHTNESS_40,
-                                   RF_CODE_BRIGHTNESS_60,
-                                   RF_CODE_BRIGHTNESS_80,
-                                   RF_CODE_BRIGHTNESS_100
-                               ],
-                               {
-                                   "Jump": RF_CODE_JUMP,
-                                   "Fade": RF_CODE_FADE,
-                                   "Strobe": RF_CODE_STROBE,
-                               },
-                               RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH)
-
-    delay_off_button = Button('delay_off_button', "60s Delay OFF", "mdi:lightbulb-off-outline", RF_CODE_60S_OFF,
-                              RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH)
-    brightness_plus_button = Button('brightness_plus_button', "Brightness+", "mdi:brightness-7",
-                                    RF_CODE_BRIGHTNESS_PLUS, RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH, 6)
-    brightness_minus_button = Button('brightness_minus_button', "Brightness-", "mdi:brightness-5",
-                                     RF_CODE_BRIGHTNESS_MINUS, RF_LED_PROTOCOL, RF_LED_PULSE_LENGTH, 6)
-
-    plug_a = Switch('wireless_plug_a', 'Plug A', 'mdi:power', RF_CODE_PLUG_A_ON, RF_CODE_PLUG_A_OFF, RF_PLUG_PROTOCOL,
-                    RF_PLUG_PULSE_LENGTH)
-    plug_b = Switch('wireless_plug_b', 'Plug B', 'mdi:power', RF_CODE_PLUG_B_ON, RF_CODE_PLUG_B_OFF, RF_PLUG_PROTOCOL,
-                    RF_PLUG_PULSE_LENGTH)
-    plug_c = Switch('wireless_plug_c', 'Plug C', 'mdi:power', RF_CODE_PLUG_C_ON, RF_CODE_PLUG_C_OFF, RF_PLUG_PROTOCOL,
-                    RF_PLUG_PULSE_LENGTH)
-
-    entities = [
-        light_switch,
-        delay_off_button,
-        brightness_plus_button,
-        brightness_minus_button,
-
-        plug_a,
-        plug_b,
-        plug_c,
-    ]
+def create_entities(config_entities):
+    configured_entities = []
+    for key, value in config_entities.items():
+        if isinstance(value, dict):
+            match value.get("type"):
+                case "light":
+                    configured_entities.append(LightSwitch(
+                        key,
+                        value.get("name"),
+                        value.get("icon"),
+                        value.get("rf_code_on"),
+                        value.get("rf_code_off"),
+                        value.get("brightness_levels"),
+                        value.get("effects"),
+                        value.get("rf_protocol", default_rf_protocol),
+                        value.get("rf_pulse_length"),
+                        value.get("rf_repeat", default_rf_repeat),
+                    ))
+                case "switch":
+                    configured_entities.append(Switch(
+                        key,
+                        value.get("name"),
+                        value.get("icon"),
+                        value.get("rf_code_on"),
+                        value.get("rf_code_off"),
+                        value.get("rf_protocol", default_rf_protocol),
+                        value.get("rf_pulse_length"),
+                        value.get("rf_repeat", default_rf_repeat),
+                    ))
+                case "button":
+                    configured_entities.append(Button(
+                        key,
+                        value.get("name"),
+                        value.get("icon"),
+                        value.get("rf_code"),
+                        value.get("rf_protocol", default_rf_protocol),
+                        value.get("rf_pulse_length"),
+                        value.get("rf_repeat", default_rf_repeat),
+                    ))
+                case _:
+                    logging.info("%s: Invalid entity type: %s", key, value.get("type"))
+    return configured_entities
 
 
 def on_message(client: paho.Client, userdata, msg: paho.MQTTMessage):
     payload = msg.payload.decode()
     logging.info("MQTT: Received message: %s %s, retain=%s", msg.topic, payload, msg.retain)
 
-    if config.mqtt_ha_birth_topic is not None:
-        if msg.topic == config.mqtt_ha_birth_topic and payload == config.mqtt_ha_birth_payload:
+    if config["ha"]["birth_topic"] is not None:
+        if msg.topic == config["ha"]["birth_topic"] and payload == config["ha"]["birth_payload"]:
             # TODO add a randomized delay
             publish_entity_discovery_messages(client)
 
     for entity in entities:
         entity.handle_message(client, msg.topic, payload)
-
-
-if hasattr(config, 'ha_device_name') and config.ha_device_name:
-    hostname = re.sub(r'[^a-zA-Z0-9_-]', '_', config.ha_device_name)
-else:
-    hostname = re.sub(r'[^a-zA-Z0-9_-]', '_', socket.gethostname())
 
 
 def publish_entity_discovery_messages(client: paho.Client):
@@ -330,8 +289,8 @@ def on_connect(client: paho.Client, userdata, flags: paho.ConnectFlags, reason_c
         logging.error("MQTT: Unable to connect to broker, reason code: %s", reason_code)
     else:
         logging.info("MQTT: Connected to broker")
-        if config.mqtt_ha_birth_topic is not None and config.mqtt_ha_birth_payload is not None:
-            client.subscribe(config.mqtt_ha_birth_topic)
+        if config["ha"]["birth_topic"] is not None and config["ha"]["birth_payload"] is not None:
+            client.subscribe(config["ha"]["birth_topic"])
         else:
             publish_entity_discovery_messages(client)
 
@@ -353,19 +312,33 @@ def on_log(client: paho.Client, userdata, level: int, msg: str):
 
 
 if __name__ == '__main__':
-    create_entities()
+    with open("config.toml", "rb") as f:
+        config = tomllib.load(f)
+
+    device_name = config["ha"].get("device_name") if isinstance(config["ha"], dict) else None
+    hostname = re.sub(r'[^a-zA-Z0-9_-]', '_', device_name or socket.gethostname())
+
+    rf_gpio_pin = config["rf"].get("gpio_pin", 17) if isinstance(config["rf"], dict) else None
+    default_rf_protocol = config["rf"].get("protocol", 1) if isinstance(config["rf"], dict) else None
+    default_rf_repeat = config["rf"].get("repeat", 10) if isinstance(config["rf"], dict) else None
+
+    if len(config) == 0 or config.get("entities") is None or len(config.get("entities")) == 0:
+        logging.error("No entities defined in config")
+        exit(1)
+
+    entities = create_entities(config.get("entities"))
 
     client = paho.Client(paho.CallbackAPIVersion.VERSION2,
-                         client_id="rpi-rf-mqtt-" + hostname + "_" + str(int(time.time())))
+                         client_id=config["mqtt"]["topic_prefix"] + "-" + hostname + "_" + str(int(time.time())))
     client.enable_logger(logging.root)
-    client.username_pw_set(config.mqtt_user, config.mqtt_password)
+    client.username_pw_set(config["mqtt"]["user"], config["mqtt"]["password"])
     client.on_log = on_log
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
     client.on_message = on_message
-    # client.will_set(config.mqtt_topic_prefix + "/" + hostname + "/status", "0",
+    # client.will_set(config["mqtt"]["topic_prefix"] + "/" + hostname + "/status", "0",
     #                 qos=config.qos, retain=config.retain)
-    client.connect_async(config.mqtt_host, int(config.mqtt_port))
+    client.connect_async(config["mqtt"]["host"], int(config["mqtt"]["port"]))
 
     try:
         client.loop_forever(retry_first_connection=True)
