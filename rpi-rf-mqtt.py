@@ -6,6 +6,7 @@ import socket
 import sys
 import time
 import tomllib
+import typing
 import uuid
 
 import logging
@@ -40,9 +41,17 @@ class MqttEntity(ABC):
     def __str__(self):
         return str(vars(self))
 
+    def build_discovery(self) -> dict[str, typing.Any]:
+        return {
+            "name": self.name,
+            "icon": self.icon,
+            "unique_id": self.unique_id,
+            "device": self.device,
+        }
+
     def initial_publish(self, client: paho.Client):
         if self.discovery_topic is not None:
-            client.publish(self.discovery_topic, json.dumps(vars(self)))
+            client.publish(self.discovery_topic, json.dumps(self.build_discovery()))
 
     def subscribe(self, client: paho.Client):
         if self.command_topic is not None:
@@ -54,6 +63,10 @@ class MqttEntity(ABC):
 
 
 class Button(MqttEntity):
+    """
+    https://www.home-assistant.io/integrations/button.mqtt/
+    """
+
     def __init__(self, entity_id: str, name: str, icon: str, rf_code: int, rf_protocol: int = 1,
                  rf_pulse_length: int = None,
                  rf_repeat: int = None):
@@ -62,6 +75,11 @@ class Button(MqttEntity):
         self.rf_protocol = rf_protocol
         self.rf_pulse_length = rf_pulse_length
         self.rf_repeat = rf_repeat
+
+    def build_discovery(self) -> dict[str, typing.Any]:
+        return super().build_discovery() | {
+            "command_topic": self.command_topic,
+        }
 
     def handle_message(self, client: paho.Client, topic: str, payload):
         if topic == self.command_topic:
@@ -73,6 +91,10 @@ class Button(MqttEntity):
 
 
 class Switch(MqttEntity):
+    """
+    https://www.home-assistant.io/integrations/switch.mqtt/
+    """
+
     def __init__(self, entity_id: str, name: str, icon: str, rf_code_on: int, rf_code_off: int, rf_protocol: int = 1,
                  rf_pulse_length: int = None, rf_repeat: int = None):
         super().__init__(entity_id, name, icon, "switch")
@@ -81,6 +103,12 @@ class Switch(MqttEntity):
         self.rf_protocol = rf_protocol
         self.rf_pulse_length = rf_pulse_length
         self.rf_repeat = rf_repeat
+
+    def build_discovery(self) -> dict[str, typing.Any]:
+        return super().build_discovery() | {
+            "state_topic": self.state_topic,
+            "command_topic": self.command_topic,
+        }
 
     def handle_message(self, client: paho.Client, topic: str, payload):
         if topic == self.command_topic:
@@ -96,6 +124,10 @@ class Switch(MqttEntity):
 
 
 class LightSwitch(MqttEntity):
+    """
+    https://www.home-assistant.io/integrations/light.mqtt/
+    """
+
     def __init__(self, entity_id: str, name: str, icon: str, rf_code_on: int, rf_code_off: int,
                  brightness_codes: list[int] = None, effects: dict[str, int] = None,
                  rf_protocol: int = 1, rf_pulse_length: int = None, rf_repeat: int = None):
@@ -111,15 +143,24 @@ class LightSwitch(MqttEntity):
 
         self.brightness_state_topic = self.state_topic + "/brightness"
         self.brightness_command_topic = self.brightness_state_topic + "/set"
-        if brightness_codes is not None:
-            self.brightness_codes = brightness_codes
-            self.brightness_scale = len(brightness_codes)
+        self.brightness_codes = brightness_codes
         if effects is not None and len(effects) > 0:
             effects.update({"Off": -1})
             self.effects = effects
-            self.effect_list = list(effects.keys())
             self.effect_state_topic = self.state_topic + "/effect"
             self.effect_command_topic = self.effect_state_topic + "/set"
+
+    def build_discovery(self) -> dict[str, typing.Any]:
+        return super().build_discovery() | {
+            "state_topic": self.state_topic,
+            "command_topic": self.command_topic,
+            "brightness_state_topic": self.brightness_state_topic,
+            "brightness_command_topic": self.brightness_command_topic,
+            "brightness_scale": len(self.brightness_codes),
+            "effect_list": list(self.effects.keys()),
+            "effect_state_topic": self.effect_state_topic,
+            "effect_command_topic": self.effect_command_topic,
+        }
 
     def subscribe(self, client: paho.Client):
         super().subscribe(client)
