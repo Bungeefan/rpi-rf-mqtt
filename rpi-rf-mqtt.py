@@ -196,7 +196,7 @@ class LightSwitch(MqttEntity):
 
         if topic == self.effect_command_topic:
             if payload == "Off":
-                self.set_brightness(client, 1)
+                self.set_brightness(client, self.brightness_state or 1)
                 client.publish(self.effect_state_topic, "OFF", retain=True)
                 return
 
